@@ -184,10 +184,11 @@ dsh plugin --profile desktop add "<这个目录的绝对路径>"
 node scripts/smoke-host.mjs      # Host 半区 37 项：路由、状态、活动工作计数、标记消费、命令行/WMI 脚本拼装（含隐藏窗口）
 node scripts/smoke-client.mjs    # 浏览器半区 27 项：装载、slot 注册、两条入口、会话续接、刷新标记
 node scripts/selftest-helper.mjs # helper 真机自检 23 项：直启与 WMI 启动各跑一遍杀进程/等退出/重新拉起、取消标记、PID 复用防护，并扫屏确认没有控制台窗口
-node scripts/install-check.mjs   # 13 项：把打出来的 tgz 装进一个新建的 profile，再让 launcher 组合它（需要 PATH 上有 dsh 和 pnpm）
+node scripts/package-check.mjs   # 15 项：打包、解开、验包，再用包里那份 lib 跑一遍上面两个 smoke
+node scripts/install-check.mjs   # 13 项：把 tgz 真的装进一个新建的 profile，再让 launcher 组合它（需要 PATH 上有 dsh 和 pnpm）
 ```
 
-前三个看的是**源码树**，最后一个看的是**发出去的那个 tgz**。这两者会分叉：`files` 漏写一个文件、bundle patch 没进包、`exports` 指错路径——源码树全都正常，用户装上去什么都没有。所以发布前那一步是把包真的装一遍，再问 launcher「你组合出来的树里有它吗」。
+前三个看的是**源码树**，后两个看的是**发出去的那个 tgz**。这两者会分叉：`files` 漏写一个文件、bundle patch 没进包、`exports` 指错路径——源码树全都正常，用户装上去什么都没有。`package-check` 把包解开、用它自带的 `lib/` 再跑一遍 smoke；`install-check` 走得更远一步，真的让 launcher 把这个包装进 profile。两条都是「别相信源码树正常就等于包正常」。
 
 `selftest-helper.mjs` 用一次性的 `powershell.exe` 进程冒充「壳」和「Host」，**不会碰真正的 DSH**，因为它自己正跑在里面。第 2 组用的是和 Host 完全相同的 WMI 启动路径，并断言 helper 的父进程是 `WmiPrvSE.exe`——也就是说，「helper 不随壳一起死」这一点是跑出来验证的，不是推断的。同一组还会在 helper 运行期间**真的枚举屏幕上的可见窗口**（`scripts/find-visible-window.ps1`），确认没有那个标题为 `dsh-restart helper` 的控制台窗口；扫描器本身先对着一个已知可见的窗口验证过「看得见才算数」，免得负断言变成一个瞎子的断言。
 
@@ -215,22 +216,23 @@ git tag v0.3.4
 git push origin main --tags
 ```
 
-`release.yml` 随后在 `windows-latest` 上按这个顺序做五件事：
+`release.yml` 随后在 `windows-latest` 上按这个顺序做四件事：
 
-1. 装好 launcher 和 pnpm（下一步要用）；
-2. 比对 tag 与 `package.json` 的 version（不一致就红，不打包）；
-3. 跑 `npm test`；
-4. 用同一个 checkout 打 `npm pack`，附上 `.sha256`，然后**把这个 tgz 装进一个新建的 profile，让 launcher 组合一遍**——装不上或者组合不出这个插件就红，不发；
-5. 删掉这个 tag 上可能已有的 release，重新建一个公开的，正文由 `scripts/release-notes.mjs` 从上一个 tag 之后的提交生成。
+1. 比对 tag 与 `package.json` 的 version（不一致就红，不打包）；
+2. 跑 `npm test`；
+3. 用同一个 checkout 打 `npm pack`，附上 `.sha256`，然后**解开这个 tgz 验包**：`files` 承诺的、`main` / `exports` 指向的、bundle patch 和 `lib/helper.ps1` 都必须在包里；最后把**包里那份** `lib/index.js` 和 `lib/client.js` 拉起来，跑各自的 smoke（37 项 / 27 项）。任何一项不对就红，不发；
+4. 删掉这个 tag 上可能已有的 release，重新建一个公开的，正文由 `scripts/release-notes.mjs` 从上一个 tag 之后的提交生成。
 
-顺序是刻意的：**先验版本、再跑测试、再验包、最后才发**。任何一步红了都什么都发不出去，所以 Release 里那个 tgz 一定是「跑绿了、而且真的装得上」的那份。
+想连「装进去」这一步也验，打 tag 之前跑一次 `npm run verify:install`（即 `install-check.mjs`）：它把包装进一个刚建的 profile，再让 launcher 组合一遍。这条没放进 Actions —— 在 Windows runner 上全局装 launcher 要好几分钟，为一个 30 kB 的插件不值得；而第 3 步已经验到了包本身。
+
+顺序是刻意的：**先验版本、再跑测试、再验包、最后才发**。任何一步红了都什么都发不出去，所以 Release 里那个 tgz 一定是「跑绿了、而且包里那份代码真的能起来」的那份。
 
 两条容易踩的坑，都是这台流水线自己踩出来的：
 
 - **发布说明不能用 `--generate-notes`。** 那个功能只列「合并的 PR」，而这个仓库是直接往 `main` 推的，v0.3.3 第一版发出来时正文就只有一行 `Full Changelog`。
 - **不能用 `gh release edit` 就地改。** tag 被移到新提交之后，旧 release 对外就查不到了（`GET /releases/tags/vX` 返回 404），但带 token 的 `gh release view` 还找得到它——于是编辑「成功」了三次，公开 API 里始终只有一个更老的版本。所以现在是删掉重建。
 
-这两条的共同点，也是第 4 步存在的理由：**流水线的绿灯说的是「命令返回 0」，不是「东西对了」。** 所以每一步都回头看结果——读回 API 看 release 是不是公开的、正文够不够长；装一遍看包是不是真的能被 launcher 组合。
+这两条的共同点，也是第 3 步存在的理由：**流水线的绿灯说的是「命令返回 0」，不是「东西对了」。** 所以每一步都回头看结果——读回 API 看 release 是不是公开的、正文够不够长；解开包看里面是不是真的齐。
 
 发布完还会**读回 API 校验**：`isDraft` 必须是 `false`、正文长度必须够；不对就用 `::error::` 让这一步红掉。想重发一个已存在的 tag（比如某步一时抽风），用 `workflow_dispatch` 再跑一次即可——它会重建 release，说明也一起重算。
 

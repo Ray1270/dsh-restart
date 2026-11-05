@@ -42,6 +42,9 @@ jobs:
     # Windows, for the same reason CI is: the helper suite drives WMI and inspects
     # real windows, none of which exists on Linux.
     runs-on: windows-latest
+    # A step that hangs is a release that never happens and a run that occupies
+    # the queue for hours. The whole job takes about two minutes when healthy.
+    timeout-minutes: 30
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
 
@@ -56,12 +59,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-
-      # The install check below is the only step that talks to the real
-      # launcher, so it needs the launcher and the pnpm it forwards to. Failing
-      # here is deliberate: a release nobody can install is not a release.
-      - name: Install the launcher and pnpm
-        run: npm install --global pnpm @deepseek-ai/dsh
 
       # The tag is a claim about what is in the box. Check the claim first.
       - name: The tag must name the packaged version
@@ -87,11 +84,18 @@ jobs:
           sha256sum "$tgz" > "$tgz.sha256"
 
           # Everything above tests the source tree. This tests the thing people
-          # download: install the tarball into a profile that never existed, then
-          # ask the launcher to compose it. `files` and the bundle patch are only
+          # download: unpack the tarball, check that everything package.json
+          # promises is inside it, and run the packed host and client halves
+          # against their own smoke tests. `files` and the bundle patch are only
           # exercised by shipping a package — the tree can be perfect while the
           # package is missing a file.
-          node scripts/install-check.mjs --tarball "$tgz"
+          #
+          # The fuller check (`scripts/install-check.mjs`) installs the tarball
+          # into a fresh profile with the real launcher. It is run before tagging,
+          # not here: `npm i -g @deepseek-ai/dsh` on a Windows runner is minutes
+          # of install for a 30 kB plugin, and a release step that slow gets
+          # skipped the first time it is inconvenient.
+          node scripts/package-check.mjs --tarball "$tgz"
 
           # The body comes from the commits between the previous tag and this one,
           # not from `gh --generate-notes`: that reads only merged pull requests,

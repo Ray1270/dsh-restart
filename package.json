@@ -38,6 +38,7 @@
     "test": "node scripts/smoke-host.mjs && node scripts/smoke-client.mjs && node scripts/selftest-helper.mjs",
     "smoke": "node scripts/smoke-host.mjs && node scripts/smoke-client.mjs",
     "selftest": "node scripts/selftest-helper.mjs",
+    "check:package": "node scripts/package-check.mjs",
     "verify:install": "node scripts/install-check.mjs"
   },
   "dsh": {
