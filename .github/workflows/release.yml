@@ -1,0 +1,94 @@
+# Publishing. Pushing a tag is the only thing that creates a release, and the
+# tarball attached to that release is the one this job packed and tested — not a
+# file uploaded by hand from someone's laptop.
+#
+#   git tag v0.3.3 && git push origin v0.3.3
+#
+# Order matters: the tag is checked against package.json first, then the suites
+# run on exactly the tree that will ship, and only then is anything packed. A red
+# suite publishes nothing.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Recovery path: re-run the pipeline for a tag that already exists, e.g. after
+  # fixing a flaky step, without moving the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish, e.g. v0.3.3
+        required: true
+        type: string
+
+# `gh release create` writes to the repository; the token needs nothing else.
+permissions:
+  contents: write
+
+# A tag is immutable, so these runs are cheap enough to leave alone — cancelling
+# one mid-flight would leave half a release behind.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# One dialect for every step. The runner's default shell is pwsh, and the pack
+# step is plain shell; keeping all of them bash means no quoting surprises.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    # Windows, for the same reason CI is: the helper suite drives WMI and inspects
+    # real windows, none of which exists on Linux.
+    runs-on: windows-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history and every tag: `--generate-notes` builds the release body
+          # from the commits since the previous tag.
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # The tag is a claim about what is in the box. Check the claim first.
+      - name: The tag must name the packaged version
+        run: node scripts/release-check.mjs "$TAG"
+
+      - name: Run the suites
+        run: npm test
+
+      - name: Pack the tarball this release will ship
+        id: pack
+        run: |
+          npm pack --json > pack.json
+          tgz="$(node -p "require('./pack.json')[0].filename")"
+          sha256sum "$tgz" > "$tgz.sha256"
+          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+          {
+            echo "### $TAG"
+            echo
+            echo '```'
+            cat "$tgz.sha256"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tgz='${{ steps.pack.outputs.tgz }}'
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # Re-run of an existing release: replace the assets, keep the notes.
+            echo "release $TAG already exists — replacing its assets"
+            gh release upload "$TAG" "$tgz" "$tgz.sha256" --clobber
+          else
+            gh release create "$TAG" "$tgz" "$tgz.sha256" \
+              --title "$TAG" --generate-notes
+          fi

@@ -1,6 +1,7 @@
 # @ray1270/dsh-restart
 
 [![CI](https://github.com/Ray1270/dsh-restart/actions/workflows/ci.yml/badge.svg)](https://github.com/Ray1270/dsh-restart/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Ray1270/dsh-restart?sort=semver&display_name=tag)](https://github.com/Ray1270/dsh-restart/releases/latest)
 
 给 DeepSeek Harness **桌面版**加两个常驻按钮，就在窗口顶栏「应用」「编辑」右边：
 
@@ -41,6 +42,12 @@
 ## 安装
 
 到 [Releases](https://github.com/Ray1270/dsh-restart/releases) 下载最新的 `ray1270-dsh-restart-<版本>.tgz`，然后在应用里 **插件 → 添加插件** 填它的绝对路径。
+
+每个发布同时附带一个 `.sha256`，下完可以自己核对一下：
+
+```powershell
+Get-FileHash .\ray1270-dsh-restart-0.3.3.tgz -Algorithm SHA256   # 与同名 .sha256 文件比对
+```
 
 从源码装（开发）：
 
@@ -193,6 +200,23 @@ node scripts/selftest-helper.mjs # helper 真机自检 23 项：直启与 WMI �
 `refresh-harness.html` 分两阶段跑（结果和「已点击」状态放 sessionStorage，跨重载存活），因为要测的行为本身就是「页面会消失」。
 
 浏览器半区的 slot 位置来自 DSH 自带的 slot 目录（`dsh-cordis-client-runner` 里的 `conversation.session.header.utilities`：右对齐、可叠加、注入 `sessionId`）。顶栏那条菜单条则来自 `app.asar` 的 `lib/preload-app.cjs`（`installWindowsMenu`）。
+
+---
+
+## 发布（维护者）
+
+打 tag 就算发布，没有手工上传的那一步：
+
+```bash
+# 1. 改 package.json 的 version（tag 必须与之一致，否则 release 流程第一步就红）
+# 2. 提交
+git tag v0.3.3
+git push origin main --tags
+```
+
+`release.yml` 随后在 `windows-latest` 上跑完 `npm test`，用同一个 checkout 打 `npm pack`，把 tgz 和它的 `.sha256` 一起附到 Release 上，发布说明由 `--generate-notes` 从上一个 tag 之后的提交生成。
+
+顺序是刻意的：**先验版本、再跑测试、最后才打包**。测试红了就什么都发不出去，所以 Release 里那个 tgz 一定是跑绿的那份。想重发一个已存在的 tag（比如某步一时抽风），用 `workflow_dispatch` 再跑一次：会替换附件、保留原来的说明。
 
 ---
 
