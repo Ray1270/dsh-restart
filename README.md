@@ -226,7 +226,7 @@ git push origin main --tags
 
 第 4 步里的 `install-check` 需要一个真的 launcher，而在一台 windows runner 上 `npm install --global pnpm @deepseek-ai/dsh` 量到 **13 分 16 秒**（654 个包）。第一次把它加进流程时，发布就是卡在这里，然后被我拿掉了。
 
-后来发现同一台镜像上换成 `npm i -g --prefix "$RUNNER_TEMP/dsh-launcher"`，同样 654 个包 **64 秒**——区别只是写到 C: 盘的默认前缀，还是写到临时盘。所以现在用的是后者，`.github/actions/launcher/action.yml` 里就这一段加一行 PATH；CI 里也给它单开了一个 `install` job，约 1 分钟。
+后来发现同一台镜像上换成 `npm i -g --prefix "$RUNNER_TEMP/dsh-launcher"`，同样 654 个包 **64 秒**（又一次 78 秒）——区别只是写到 C: 盘的默认前缀，还是写到临时盘。所以现在用的是后者，`.github/actions/launcher/action.yml` 里就这一段加一行 PATH；CI 里也给它单开了一个 `install` job，整轮约 1 分半。
 
 中间还试过按 launcher 版本缓存那个前缀：197 MB，恢复 40 秒，对比 64 秒的安装——省下半分钟，代价是一个会失效的缓存、一段「缓存里的东西还跑得起来吗」的探测，以及两处要同步的版本号。删了。
 
