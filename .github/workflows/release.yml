@@ -67,6 +67,13 @@ jobs:
       - name: Run the suites
         run: npm test
 
+      # Needed by the install check below. Cached by launcher version, so this is
+      # a restore rather than a 13-minute global install — see the action's own
+      # comment for the measurement.
+      - uses: ./.github/actions/launcher
+        with:
+          prefix: ${{ runner.temp }}/dsh-launcher
+
       # One step on purpose. Splitting pack / notes / publish across steps means
       # values travel through step outputs and the working tree, and a step that
       # half-succeeds is reported as "success" while leaving an empty file behind
@@ -89,13 +96,14 @@ jobs:
           # against their own smoke tests. `files` and the bundle patch are only
           # exercised by shipping a package — the tree can be perfect while the
           # package is missing a file.
-          #
-          # The fuller check (`scripts/install-check.mjs`) installs the tarball
-          # into a fresh profile with the real launcher. It is run before tagging,
-          # not here: `npm i -g @deepseek-ai/dsh` on a Windows runner is minutes
-          # of install for a 30 kB plugin, and a release step that slow gets
-          # skipped the first time it is inconvenient.
           node scripts/package-check.mjs --tarball "$tgz"
+
+          # And this tests the thing people do: install it. A throwaway profile
+          # under a throwaway $DSH_HOME, through the real launcher, then ask the
+          # launcher to compose the profile and read back what it composed. The
+          # launcher has to be installed for that, which is why the step above
+          # restores it from cache first.
+          node scripts/install-check.mjs --tarball "$tgz"
 
           # The body comes from the commits between the previous tag and this one,
           # not from `gh --generate-notes`: that reads only merged pull requests,

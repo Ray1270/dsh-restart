@@ -1,0 +1,90 @@
+# Puts a real `dsh` and `pnpm` on PATH, and makes that cost a minute instead of
+# thirteen.
+#
+# `install-check` is the only check that installs the tarball the way a user
+# does, so it needs the real launcher. Installing `@deepseek-ai/dsh` on a
+# windows-latest runner takes 13.3 minutes — measured, on the first release that
+# tried it — almost all of it npm writing a ~700 MB dependency tree. Paying that
+# per push is how a step gets deleted "just for now".
+#
+# So the tree is cached by launcher version: a new launcher release changes the
+# key, everything else is a restore. The cache is keyed on the version rather
+# than a date so it is reproducible, and the restored copy is *ran* before it is
+# trusted — a half-written cache entry would otherwise fail later, in the middle
+# of an install, looking like the plugin's fault.
+name: dsh launcher
+description: Install (or restore) the real dsh launcher and pnpm, and put them on PATH.
+
+inputs:
+  prefix:
+    description: |
+      Directory the launcher is installed into and cached from. Must be stable
+      across runs for the cache to hit; `${{ runner.temp }}/dsh-launcher` works.
+    required: true
+
+outputs:
+  version:
+    description: The launcher version that was installed (or restored).
+    value: ${{ steps.version.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Which launcher version is being cached
+      id: version
+      shell: bash
+      env:
+        PREFIX: ${{ inputs.prefix }}
+      run: |
+        set -euo pipefail
+        # A registry hiccup should not fail the job here — the install below
+        # repeats the request and reports a real error if it is still failing.
+        # `unknown` is a stable key: it just means "do not invalidate on upgrades".
+        version="$(npm view @deepseek-ai/dsh version 2>/dev/null | tail -1 || true)"
+        [ -n "$version" ] || version=unknown
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "launcher version: $version"
+
+    - uses: actions/cache@v4
+      id: cache
+      with:
+        path: ${{ inputs.prefix }}
+        # v1 marks the shape of what is in here (both packages, one prefix).
+        key: dsh-launcher-v1-${{ runner.os }}-${{ steps.version.outputs.version }}
+
+    - name: Install when the cache missed, verify when it hit
+      shell: bash
+      env:
+        PREFIX: ${{ inputs.prefix }}
+      run: |
+        set -euo pipefail
+
+        # npm puts the shims straight into the prefix on Windows, and into
+        # `bin/` everywhere else. One of these exists after an install.
+        if [ -f "$PREFIX/bin/dsh" ]; then bin="$PREFIX/bin"; else bin="$PREFIX"; fi
+
+        if "$bin/dsh" -V >/dev/null 2>&1 && "$bin/pnpm" -v >/dev/null 2>&1; then
+          echo "the launcher runs: $( "$bin/dsh" -V ), pnpm $( "$bin/pnpm" -v )"
+          exit 0
+        fi
+
+        if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
+          echo "::warning::the cached launcher does not run; installing it again"
+          rm -rf "$PREFIX"
+        fi
+
+        start=$SECONDS
+        npm i -g --prefix "$PREFIX" pnpm @deepseek-ai/dsh
+        echo "installed in $((SECONDS - start))s"
+
+        if [ -f "$PREFIX/bin/dsh" ]; then bin="$PREFIX/bin"; else bin="$PREFIX"; fi
+        "$bin/dsh" -V >/dev/null
+        "$bin/pnpm" -v >/dev/null
+
+    - name: Put it on PATH for the rest of the job
+      shell: bash
+      env:
+        PREFIX: ${{ inputs.prefix }}
+      run: |
+        set -euo pipefail
+        if [ -f "$PREFIX/bin/dsh" ]; then echo "$PREFIX/bin" >> "$GITHUB_PATH"; else echo "$PREFIX" >> "$GITHUB_PATH"; fi

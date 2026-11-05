@@ -49,3 +49,38 @@ jobs:
       # A release must never ship a tree that does not pack.
       - name: Verify the package tarball
         run: npm pack --dry-run
+
+  # The suites above read the source tree. This installs the packed tarball with
+  # the real launcher, into a profile that never existed — the one check that
+  # asks what a user actually gets, rather than what the tree contains.
+  #
+  # It is a separate job on purpose: the launcher cache is a minute of setup that
+  # the suites do not need, and a red suite should not wait behind it.
+  install:
+    name: Install the tarball (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Cached by launcher version: see .github/actions/launcher/action.yml for
+      # why this is not a 13-minute `npm i -g` on every push.
+      - uses: ./.github/actions/launcher
+        with:
+          prefix: ${{ runner.temp }}/dsh-launcher
+
+      - name: Prove the launcher is reachable the way the check will use it
+        run: |
+          set -euo pipefail
+          echo "dsh $(dsh -V) / pnpm $(pnpm -v) / $(command -v dsh)"
+
+      - name: Install into a fresh profile and compose it
+        run: node scripts/install-check.mjs
