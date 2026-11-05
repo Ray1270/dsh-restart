@@ -185,7 +185,7 @@ node scripts/smoke-host.mjs      # Host 半区 37 项：路由、状态、活动
 node scripts/smoke-client.mjs    # 浏览器半区 27 项：装载、slot 注册、两条入口、会话续接、刷新标记
 node scripts/selftest-helper.mjs # helper 真机自检 23 项：直启与 WMI 启动各跑一遍杀进程/等退出/重新拉起、取消标记、PID 复用防护，并扫屏确认没有控制台窗口
 node scripts/package-check.mjs   # 15 项：打包、解开、验包，再用包里那份 lib 跑一遍上面两个 smoke
-node scripts/install-check.mjs   # 13 项：把 tgz 真的装进一个新建的 profile，再让 launcher 组合它（需要 PATH 上有 dsh 和 pnpm）
+node scripts/install-check.mjs   # 13 项：把 tgz 真的装进一个新建的 profile，再让 launcher 组合它（需要 PATH 上有 dsh 和 pnpm；CI 里也跑这一步）
 ```
 
 前三个看的是**源码树**，后两个看的是**发出去的那个 tgz**。这两者会分叉：`files` 漏写一个文件、bundle patch 没进包、`exports` 指错路径——源码树全都正常，用户装上去什么都没有。`package-check` 把包解开、用它自带的 `lib/` 再跑一遍 smoke；`install-check` 走得更远一步，真的让 launcher 把这个包装进 profile。两条都是「别相信源码树正常就等于包正常」。
@@ -216,16 +216,21 @@ git tag v0.3.4
 git push origin main --tags
 ```
 
-`release.yml` 随后在 `windows-latest` 上按这个顺序做四件事：
+`release.yml` 随后在 `windows-latest` 上按这个顺序做五件事：
 
 1. 比对 tag 与 `package.json` 的 version（不一致就红，不打包）；
 2. 跑 `npm test`；
-3. 用同一个 checkout 打 `npm pack`，附上 `.sha256`，然后**解开这个 tgz 验包**：`files` 承诺的、`main` / `exports` 指向的、bundle patch 和 `lib/helper.ps1` 都必须在包里；最后把**包里那份** `lib/index.js` 和 `lib/client.js` 拉起来，跑各自的 smoke（37 项 / 27 项）。任何一项不对就红，不发；
-4. 删掉这个 tag 上可能已有的 release，重新建一个公开的，正文由 `scripts/release-notes.mjs` 从上一个 tag 之后的提交生成。
+3. 用同一个 checkout 打 `npm pack`，附上 `.sha256`；
+4. 连着验两次这个 tgz。`package-check` 把它解开：`files` 承诺的、`main` / `exports` 指向的、bundle patch 和 `lib/helper.ps1` 都必须在包里，最后把**包里那份** `lib/index.js` 和 `lib/client.js` 拉起来跑各自的 smoke（37 项 / 27 项）。`install-check` 再往前一步：把它真的装进一个刚建的 profile，让真 launcher 组合一遍，再读回它组合出来的东西（13 项）；
+5. 删掉这个 tag 上可能已有的 release，重新建一个公开的，正文由 `scripts/release-notes.mjs` 从上一个 tag 之后的提交生成。
 
-想连「装进去」这一步也验，打 tag 之前跑一次 `npm run verify:install`（即 `install-check.mjs`）：它把包装进一个刚建的 profile，再让 launcher 组合一遍。这条没放进 Actions —— 在 Windows runner 上全局装 launcher 要好几分钟，为一个 30 kB 的插件不值得；而第 3 步已经验到了包本身。
+第 4 步里的 `install-check` 需要一个真的 launcher，而在一台 windows runner 上 `npm install --global pnpm @deepseek-ai/dsh` 量到 **13 分 16 秒**（654 个包）。第一次把它加进流程时，发布就是卡在这里，然后被我拿掉了。
 
-顺序是刻意的：**先验版本、再跑测试、再验包、最后才发**。任何一步红了都什么都发不出去，所以 Release 里那个 tgz 一定是「跑绿了、而且包里那份代码真的能起来」的那份。
+后来发现同一台镜像上换成 `npm i -g --prefix "$RUNNER_TEMP/dsh-launcher"`，同样 654 个包 **64 秒**——区别只是写到 C: 盘的默认前缀，还是写到临时盘。所以现在用的是后者，`.github/actions/launcher/action.yml` 里就这一段加一行 PATH；CI 里也给它单开了一个 `install` job，约 1 分钟。
+
+中间还试过按 launcher 版本缓存那个前缀：197 MB，恢复 40 秒，对比 64 秒的安装——省下半分钟，代价是一个会失效的缓存、一段「缓存里的东西还跑得起来吗」的探测，以及两处要同步的版本号。删了。
+
+顺序是刻意的：**先验版本、再跑测试、再验包、再验装、最后才发**。任何一步红了都什么都发不出去，所以 Release 里那个 tgz 一定是「跑绿了、包里那份代码真的能起来、而且真能装进 profile」的那份。
 
 两条容易踩的坑，都是这台流水线自己踩出来的：
 

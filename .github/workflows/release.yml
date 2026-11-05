@@ -67,13 +67,11 @@ jobs:
       - name: Run the suites
         run: npm test
 
-      # Needed by the install check below. Cached by launcher version, so this is
-      # a restore rather than a 13-minute global install — see the action's own
-      # comment for the measurement.
+      # Needed by the install check below, and about a minute — see the action's
+      # own comment for what makes it a minute rather than a quarter of an hour.
       - uses: ./.github/actions/launcher
         with:
           prefix: ${{ runner.temp }}/dsh-launcher
-          os: ${{ runner.os }}
 
       # One step on purpose. Splitting pack / notes / publish across steps means
       # values travel through step outputs and the working tree, and a step that
@@ -101,9 +99,7 @@ jobs:
 
           # And this tests the thing people do: install it. A throwaway profile
           # under a throwaway $DSH_HOME, through the real launcher, then ask the
-          # launcher to compose the profile and read back what it composed. The
-          # launcher has to be installed for that, which is why the step above
-          # restores it from cache first.
+          # launcher to compose the profile and read back what it composed.
           node scripts/install-check.mjs --tarball "$tgz"
 
           # The body comes from the commits between the previous tag and this one,

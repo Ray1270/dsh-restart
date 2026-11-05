@@ -71,12 +71,11 @@ jobs:
         with:
           node-version: '24'
 
-      # Cached by launcher version: see .github/actions/launcher/action.yml for
-      # why this is not a 13-minute `npm i -g` on every push.
+      # Roughly a minute, and it has to be this real: the check below installs
+      # the package through this launcher.
       - uses: ./.github/actions/launcher
         with:
           prefix: ${{ runner.temp }}/dsh-launcher
-          os: ${{ runner.os }}
 
       - name: Prove the launcher is reachable the way the check will use it
         run: |
