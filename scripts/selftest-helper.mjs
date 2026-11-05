@@ -189,8 +189,19 @@ const helperPid = runHelper({
   killTimeoutMs: 6000,
 })
 
-const booted = await waitForState(statePath, (state) => state.phase !== 'boot', 5000)
-check('helper wrote boot state and advanced', booted !== null && booted.phase !== undefined, booted?.phase ?? 'no state')
+// The budget is deliberately far larger than the 400ms kill delay: this check
+// asserts that the helper ANNOUNCES itself, not how fast the machine starts a
+// cold PowerShell. On a CI runner that start took over five seconds (process
+// creation plus an antivirus scan of the script), so a 5s budget measured the
+// runner rather than the helper and failed a healthy run. The helper's own
+// cycle is bounded by killTimeoutMs, so a genuine hang still shows up below.
+const bootWaitStarted = Date.now()
+const booted = await waitForState(statePath, (state) => state.phase !== 'boot', 20000)
+check(
+  'helper wrote boot state and advanced',
+  booted !== null && booted.phase !== undefined,
+  `${booted?.phase ?? 'no state'} after ${Date.now() - bootWaitStarted}ms`,
+)
 
 const settled = await waitForState(statePath, (state) => ['relaunched', 'failed', 'aborted'].includes(state.phase), 25000)
 check('helper reached a terminal phase', settled?.phase === 'relaunched', settled?.phase ?? 'timeout')
