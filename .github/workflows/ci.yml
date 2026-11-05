@@ -35,9 +35,14 @@ jobs:
             node: '24'
 
     steps:
-      - uses: actions/checkout@v4
+      # v7 is the same action on a runtime GitHub has not deprecated: v4's node20
+      # shim is an annotation on every run that gets uglier as node20 goes away.
+      # Nothing used here changed across v5–v7 — `fetch-depth`, `ref` and
+      # `node-version` are the same inputs — but the release path only runs on a
+      # tag, so the first tag after this bump is where those inputs get proven.
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
 
@@ -65,9 +70,9 @@ jobs:
         shell: bash
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 

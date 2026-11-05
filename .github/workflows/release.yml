@@ -54,14 +54,14 @@ jobs:
       TAG: ${{ inputs.tag || github.ref_name }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history and every tag: the release body is built from the
           # commits between the previous tag and this one.
           fetch-depth: 0
           ref: ${{ inputs.tag || github.ref_name }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
