@@ -1,0 +1,51 @@
+# Continuous integration: runs the exact command a contributor runs locally.
+#
+# Windows only, because the package is Windows only — the restart helper is a
+# PowerShell script the WMI service launches outside the application's process
+# tree, and the suites drive it for real. A Linux leg would prove nothing this
+# package claims, and a leg that has never passed is how a first CI run goes red
+# for a reason nobody has evidence about.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only: the suites build and drive throwaway processes, they never write
+# back to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: npm test (${{ matrix.os }} / node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The package targets ^22.19.0 || >=24.0.0 (see package.json engines).
+          - os: windows-latest
+            node: '24'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No dependencies and no build step: the three suites run straight from
+      # the checkout with the runner's own Node.
+      - name: Run the suites
+        run: npm test
+
+      # A release must never ship a tree that does not pack.
+      - name: Verify the package tarball
+        run: npm pack --dry-run
