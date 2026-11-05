@@ -1,0 +1,58 @@
+{
+  "name": "@ray1270/dsh-restart",
+  "version": "0.3.2",
+  "description": "Refresh and one-click restart for the DeepSeek Harness desktop app: 刷新 reloads the client on the same Session, 重启 restarts the shell back on that Session through a helper the WMI service starts outside the application's process tree",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./dev.patch.yml": "./dev.patch.yml"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "dev.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "restart",
+    "refresh",
+    "desktop"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "Ray_lv",
+    "email": "1824676986@qq.com"
+  },
+  "scripts": {
+    "test": "node scripts/smoke-host.mjs && node scripts/smoke-client.mjs && node scripts/selftest-helper.mjs",
+    "smoke": "node scripts/smoke-host.mjs && node scripts/smoke-client.mjs",
+    "selftest": "node scripts/selftest-helper.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ray1270/dsh-restart.git"
+  },
+  "homepage": "https://github.com/Ray1270/dsh-restart#readme",
+  "bugs": {
+    "url": "https://github.com/Ray1270/dsh-restart/issues"
+  }
+}

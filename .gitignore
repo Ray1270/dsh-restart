@@ -1,0 +1,6 @@
+# Never commit an installed copy of this package.
+node_modules/
+
+# `npm pack` output, and anything the smoke suites leave behind.
+*.tgz
+*.log

@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>caption harness</title>
+<style>
+  /* The tokens the Desktop preload's menubar reads out of the app document. */
+  :root {
+    --dsw-font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    --dsw-alias-label-secondary: #b9c2e0;
+    --dsw-alias-label-primary: #ffffff;
+    --dsw-alias-interactive-bg-hover: rgba(127, 147, 216, 0.22);
+    --dsw-alias-state-error-primary: #ff6b6b;
+    --dsw-alias-separator-primary: rgba(127, 147, 216, 0.35);
+    --dsh-windows-titlebar-height: 40px;
+  }
+  html { background: #1b2440; }
+  body { margin: 0; color: #dbe3ff; font-family: var(--dsw-font-family); }
+  #fake-caption { position: fixed; inset: 0 0 auto; height: var(--dsh-windows-titlebar-height); }
+  #stage { padding: 60px 24px; }
+  pre { font-family: ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+  .ok { color: #7ee2a8; }
+  .bad { color: #ff8c8c; }
+</style>
+</head>
+<body>
+<div id="fake-caption"></div>
+<div id="stage"><h3>caption harness</h3><pre id="log">running…</pre></div>
+<script>
+/* ------------------------------------------------------------ mini React */
+/*
+ * Just enough of React to drive one component instance through its lifecycle:
+ * persistent hook slots, state updates that re-render, effects with cleanup.
+ * The plugin under test is a plain module, so this stands in for the real
+ * renderer the Desktop Web client would provide.
+ */
+const MiniReact = (() => {
+  let instance = null
+  let scheduled = false
+  const effects = []
+
+  const flush = () => {
+    for (const [index, fn, deps] of effects.splice(0)) {
+      instance.hooks[index]?.cleanup?.()
+      const cleanup = fn()
+      instance.hooks[index] = { cleanup, deps }
+    }
+  }
+
+  const render = (component, props) => {
+    if (instance === null) instance = { hooks: [], index: 0 }
+    instance.index = 0
+    instance.props = props
+    const tree = component(props)
+    flush()
+    return tree
+  }
+
+  const schedule = () => {
+    if (scheduled) return
+    scheduled = true
+    queueMicrotask(() => {
+      scheduled = false
+      if (root !== null) root()
+    })
+  }
+
+  let root = null
+
+  return {
+    createElement(type, props, ...children) {
+      return { type, props: props ?? {}, children }
+    },
+    useState(initial) {
+      const self = instance
+      const index = self.index++
+      if (!(index in self.hooks)) self.hooks[index] = typeof initial === 'function' ? initial() : initial
+      const set = (next) => {
+        const value = typeof next === 'function' ? next(self.hooks[index]) : next
+        if (Object.is(value, self.hooks[index])) return
+        self.hooks[index] = value
+        schedule()
+      }
+      return [self.hooks[index], set]
+    },
+    useRef(initial) {
+      const self = instance
+      const index = self.index++
+      if (!(index in self.hooks)) self.hooks[index] = { current: initial }
+      return self.hooks[index]
+    },
+    useEffect(fn, deps) {
+      const self = instance
+      const index = self.index++
+      const previous = self.hooks[index]
+      const changed = previous === undefined
+        || deps === undefined
+        || previous.deps === undefined
+        || deps.length !== previous.deps.length
+        || deps.some((value, i) => !Object.is(value, previous.deps[i]))
+      if (changed) effects.push([index, fn, deps])
+    },
+    mount(component, props) {
+      root = () => render(component, props)
+      return root()
+    },
+  }
+})()
+</script>
+<script>
+/* ---------------------------------------------------------------- stubs */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const results = []
+const log = document.getElementById('log')
+function check(name, ok, detail = '') {
+  results.push(ok)
+  const line = document.createElement('div')
+  line.className = ok ? 'ok' : 'bad'
+  line.textContent = `${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`
+  log.append(line)
+}
+
+/* The preload's real menubar stylesheet, copied from lib/preload-app.cjs. */
+const MENUBAR_CSS = `
+  :host { position: fixed; top: 0; left: 48px; z-index: 1100;
+    height: var(--dsh-windows-titlebar-height); display: flex; align-items: center;
+    font-family: var(--dsw-font-family); -webkit-app-region: no-drag; }
+  [role=menubar] { display: flex; gap: 2px; }
+  button { height: 28px; padding: 0 10px; border: 0; border-radius: 6px;
+    background: transparent; color: var(--dsw-alias-label-secondary);
+    font: inherit; font-size: 14px; cursor: default; }
+  button:hover, button[aria-expanded=true] { background: var(--dsw-alias-interactive-bg-hover);
+    color: var(--dsw-alias-label-primary); }
+`
+
+const calls = []
+let statusBody = { canRestart: true, activeWork: { agents: 1, jobs: 1, terminals: 0, total: 2, detectionAvailable: true } }
+const fetchStub = async (url, init = {}) => {
+  calls.push({ url: String(url), method: init.method ?? 'GET', body: init.body ?? null })
+  let body = {}
+  if (String(url).endsWith('/status')) body = statusBody
+  else if (String(url).endsWith('/restart')) body = { ok: true }
+  else if (String(url).endsWith('/pending')) body = { sessionId: null }
+  return { ok: true, status: 200, json: async () => body }
+}
+globalThis.fetch = fetchStub
+
+let loaded = null
+window.__ModuleLoader__ = { load: (definition) => { loaded = definition } }
+</script>
+<script src="../lib/client.js"></script>
+<script>
+(async () => {
+  check('module loads', loaded?.id === '@ray1270/dsh-restart')
+  const plugin = loaded.factory((specifier) => {
+    if (specifier === 'react') return MiniReact
+    throw new Error(`unexpected require: ${specifier}`)
+  })
+
+  const registrations = []
+  const ctx = {
+    slots: {
+      inject: (name, callback) => { registrations.push(name); return callback() },
+      register: (options, component) => {
+        registrations.push(options)
+        registrations.component = component
+        return () => {}
+      },
+    },
+    effect(fn) { return fn() },
+    get() { return undefined },
+  }
+
+  plugin.apply(ctx)
+  await sleep(50)
+  check('no caption entry before the shell draws its bar', document.querySelector('[data-windows-menu]') === null)
+  check('header seat registered', registrations.includes('conversation.session.header.utilities'))
+
+  /* The Desktop preload mounts its menubar onto <body> once the frame exists. */
+  const host = document.createElement('div')
+  host.dataset.windowsMenu = ''
+  const shadow = host.attachShadow({ mode: 'open' })
+  const style = document.createElement('style')
+  style.textContent = MENUBAR_CSS
+  const bar = document.createElement('div')
+  bar.setAttribute('role', 'menubar')
+  for (const label of ['应用', '编辑']) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.textContent = label
+    bar.append(button)
+  }
+  shadow.append(style, bar)
+  document.body.append(host)
+  await sleep(60)
+
+  const group = shadow.querySelector('[data-dsh-restart-caption-group]')
+  const refreshButton = shadow.querySelector('[data-dsh-refresh-caption]')
+  const restartButton = shadow.querySelector('[data-dsh-restart-caption]')
+  check('caption entries appear once the bar exists', group !== null && refreshButton !== null && restartButton !== null)
+  check('entries are appended after the menubar', group?.previousSibling === bar)
+  check('refresh sits before restart', refreshButton?.nextSibling === restartButton)
+  check('refresh is a text item like its neighbours', refreshButton?.textContent === '刷新', refreshButton?.textContent)
+  check('restart is a text item like its neighbours', restartButton?.textContent === '重启', restartButton?.textContent)
+  check('refresh says what it keeps', (refreshButton?.title || '').includes('会话'), refreshButton?.title)
+  check('entries keep the shell font size', getComputedStyle(refreshButton).fontSize === '14px' && getComputedStyle(restartButton).fontSize === '14px', `${getComputedStyle(refreshButton).fontSize} / ${getComputedStyle(restartButton).fontSize}`)
+  check('entries keep the shell item height', getComputedStyle(refreshButton).height === '28px' && getComputedStyle(restartButton).height === '28px', `${getComputedStyle(refreshButton).height} / ${getComputedStyle(restartButton).height}`)
+  check('entries keep the menubar rhythm', getComputedStyle(group).gap === '2px', getComputedStyle(group).gap)
+  check('restart has its phase marker', restartButton?.dataset.dshRestartPhase === 'idle', restartButton?.dataset.dshRestartPhase)
+  check('refresh has its phase marker', refreshButton?.dataset.dshRefreshPhase === 'idle', refreshButton?.dataset.dshRefreshPhase)
+
+  /* The header seat tracks the open Session and steps aside for the caption. */
+  const component = registrations.component
+  const headerProps = { sessionId: 'session-42' }
+  const tree = MiniReact.mount(component, headerProps)
+  check('header seat renders nothing while the caption entry is live', tree === null, JSON.stringify(tree))
+
+  /* First click: pre-flight only. */
+  restartButton.click()
+  await sleep(30)
+  const armed = calls.filter((call) => call.url.endsWith('/status')).length
+  check('first click asks the Host for a pre-flight', armed >= 1, `${armed} status call(s)`)
+  check('first click does not restart', calls.some((call) => call.url.endsWith('/restart')) === false)
+  check('armed label carries the interrupt count', restartButton.textContent === '确认重启 · 2 项', restartButton.textContent)
+  check('armed phase is marked', restartButton.dataset.dshRestartPhase === 'arming', restartButton.dataset.dshRestartPhase)
+  check('armed title explains the second click', (restartButton.title || '').includes('2 项'), restartButton.title)
+
+  /* Second click: execute, with the tracked Session in the body. */
+  restartButton.click()
+  await sleep(120)
+  const restart = calls.find((call) => call.url.endsWith('/restart'))
+  check('second click sends the restart', restart !== undefined && restart.method === 'POST')
+  check('restart carries the open Session', restart?.body?.includes('session-42'), restart?.body)
+  check('running phase is marked', restartButton.dataset.dshRestartPhase === 'running', restartButton.dataset.dshRestartPhase)
+
+  /* The watch loop may still be polling; that is the expected shape. */
+  const summary = `${results.filter(Boolean).length}/${results.length}`
+  document.title = `caption harness ${summary}`
+  const line = document.createElement('div')
+  line.textContent = `\n${summary} checks passed`
+  log.append(line)
+  window.__HARNESS_RESULT__ = summary
+  console.log(`HARNESS ${summary}`)
+})().catch((error) => {
+  console.error('HARNESS CRASH', error)
+  document.title = 'caption harness CRASH'
+})
+</script>
+</body>
+</html>

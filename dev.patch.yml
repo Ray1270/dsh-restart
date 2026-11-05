@@ -1,0 +1,24 @@
+# Development overlay: identical to cordis.patch.yml except for the plugin
+# anchor. `./lib/index.js` is rewritten by the loader into a file URL beside
+# THIS patch file, so the plugin loads straight from the source tree with no
+# install step:
+#
+#   dsh --profile desktop --patch <abs path to this file>
+#
+# (A bare `name` instead resolves from the profile's own node_modules, which is
+# the right anchor for an installed bundle — see cordis.patch.yml.)
+#
+# Note that the client half is NOT picked up by `--patch`: the browser module is
+# discovered from the installed package (`exports["./client"]` + `dsh.client`).
+# Use the install step when testing the button itself.
+- insert:
+    # Quoted for the same reason as cordis.patch.yml: `@` cannot open a plain
+    # YAML scalar.
+    - id: '@ray1270/dsh-restart'
+      name: ./lib/index.js
+      config:
+        enabled: true
+        delayMs: 1200
+        hostGraceMs: 8000
+        killTimeoutMs: 15000
+        pendingTtlMinutes: 30

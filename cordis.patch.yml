@@ -1,0 +1,33 @@
+# @ray1270/dsh-restart bundle patch: mounts the restart plugin into the host
+# composition of a dsh profile. The Host half only adds four routes under
+# /api/dsh-restart/*; the browser half adds 刷新 + 重启 to the window caption
+# bar (and to the Session header where that bar does not exist).
+#
+# Activation:
+#
+#   dsh plugin --profile desktop add <this package|local path>
+#
+# The routes refuse every destructive request unless this Host really is a
+# desktop Host (Electron binary in Node mode), so enabling the bundle in a CLI
+# profile is harmless: the button reports "not supported" and does nothing.
+#
+# Config fields (all optional):
+#   enabled              master switch; false hides nothing but refuses
+#                        every restart (default true)
+#   delayMs              pause before the helper kills the shell, so the HTTP
+#                        reply reaches the browser first        (default 1200)
+#   hostGraceMs          how long the Host may take to shut itself down before
+#                        the helper force-kills it               (default 8000)
+#   killTimeoutMs        hard ceiling on waiting for the old processes to
+#                        disappear                              (default 15000)
+#   pendingTtlMinutes    how long "reopen this Session after the restart" stays
+#                        believable                            (default 30)
+- insert:
+    - id: '@ray1270/dsh-restart'
+      name: '@ray1270/dsh-restart'
+      config:
+        enabled: true
+        delayMs: 1200
+        hostGraceMs: 8000
+        killTimeoutMs: 15000
+        pendingTtlMinutes: 30

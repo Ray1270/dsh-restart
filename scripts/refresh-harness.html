@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>refresh harness</title>
+<style>
+  /* The tokens the Desktop preload's menubar reads out of the app document. */
+  :root {
+    --dsw-font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    --dsw-alias-label-secondary: #b9c2e0;
+    --dsw-alias-label-primary: #ffffff;
+    --dsw-alias-interactive-bg-hover: rgba(127, 147, 216, 0.22);
+    --dsw-alias-state-error-primary: #ff6b6b;
+    --dsw-alias-separator-primary: rgba(127, 147, 216, 0.35);
+    --dsh-windows-titlebar-height: 40px;
+  }
+  html { background: #1b2440; }
+  body { margin: 0; color: #dbe3ff; font-family: var(--dsw-font-family); }
+  #fake-caption { position: fixed; inset: 0 0 auto; height: var(--dsh-windows-titlebar-height); }
+  #stage { padding: 60px 24px; }
+  pre { font-family: ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="fake-caption"></div>
+<div id="stage"><h3>refresh harness</h3><pre id="log">running…</pre></div>
+
+<script>
+/*
+ * End-to-end test for the refresh entry.
+ *
+ * Unlike the caption harness this one *must* let the real reload happen: that
+ * is the behaviour under test. So the run is split in two phases that survive
+ * the navigation — results and the "we already clicked" flag go into
+ * sessionStorage, which is exactly what a reload keeps.
+ *
+ * Phase 1: mount the caption entries, publish a Session, click 刷新, and check
+ *          the marker before the page goes away.
+ * Phase 2: the page has come back. Check the marker survived, that the plugin
+ *          reopened the Session, and that it consumed the marker.
+ */
+const PHASE_KEY = 'dsh-refresh-harness:phase'
+const RESULTS_KEY = 'dsh-refresh-harness:results'
+const MARKER_KEY = '@ray1270/dsh-restart:resume'
+const SESSION = 'session-refresh-7'
+
+const results = (() => {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(RESULTS_KEY) ?? '[]')
+    return Array.isArray(stored) ? stored : []
+  } catch {
+    return []
+  }
+})()
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const log = document.getElementById('log')
+
+function check(name, ok, detail = '') {
+  results.push({ name, ok, detail })
+}
+
+function report() {
+  const passed = results.filter((entry) => entry.ok).length
+  const summary = `${passed}/${results.length} checks passed`
+  log.textContent = `${results.map((entry) => `${entry.ok ? 'PASS' : 'FAIL'}  ${entry.name}${entry.detail ? ` — ${entry.detail}` : ''}`).join('\n')}\n\n${summary}`
+  document.title = `refresh harness ${passed}/${results.length}`
+  console.log(`HARNESS ${summary}`)
+}
+
+/* The preload's real menubar stylesheet, copied from lib/preload-app.cjs. */
+const MENUBAR_CSS = `
+  :host { position: fixed; top: 0; left: 48px; z-index: 1100;
+    height: var(--dsh-windows-titlebar-height); display: flex; align-items: center;
+    font-family: var(--dsw-font-family); -webkit-app-region: no-drag; }
+  [role=menubar] { display: flex; gap: 2px; }
+  button { height: 28px; padding: 0 10px; border: 0; border-radius: 6px;
+    background: transparent; color: var(--dsw-alias-label-secondary);
+    font: inherit; font-size: 14px; cursor: default; }
+  button:hover, button[aria-expanded=true] { background: var(--dsw-alias-interactive-bg-hover);
+    color: var(--dsw-alias-label-primary); }
+`
+
+/* ------------------------------------------------------------ stubs */
+
+const fetched = []
+globalThis.fetch = async (url, init = {}) => {
+  fetched.push({ url: String(url), method: init.method ?? 'GET' })
+  const body = String(url).endsWith('/pending') ? { sessionId: null } : {}
+  return { ok: true, status: 200, json: async () => body }
+}
+
+let loaded = null
+window.__ModuleLoader__ = { load: (definition) => { loaded = definition } }
+
+/*
+ * Enough of React for the header seat: it has to run its effects so the
+ * component publishes the open Session, and it renders nothing while the
+ * caption entries are live — which is the state this test is in.
+ */
+const ReactStub = {
+  createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
+  useState: (initial) => [initial, () => {}],
+  useRef: (initial) => ({ current: initial }),
+  useEffect: (fn) => { fn() },
+}
+
+/* The scene before the reload: the fake caption host is drawn by phase 1. */
+function drawCaptionBar() {
+  const host = document.createElement('div')
+  host.dataset.windowsMenu = ''
+  const shadow = host.attachShadow({ mode: 'open' })
+  const style = document.createElement('style')
+  style.textContent = MENUBAR_CSS
+  const bar = document.createElement('div')
+  bar.setAttribute('role', 'menubar')
+  for (const label of ['应用', '编辑']) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.textContent = label
+    bar.append(button)
+  }
+  shadow.append(style, bar)
+  document.body.append(host)
+  return shadow
+}
+
+/** A client root that records what the plugin registers and where it navigates. */
+function clientContext() {
+  const opened = []
+  const registrations = []
+  const ctx = {
+    slots: {
+      inject(name, callback) {
+        registrations.push({ name })
+        return callback()
+      },
+      register(options, component) {
+        const entry = registrations[registrations.length - 1]
+        entry.options = options
+        entry.component = component
+        return () => {}
+      },
+    },
+    effect(fn) {
+      return fn()
+    },
+    get(key) {
+      if (key === 'uiWorkspace') return { openSession: (sessionId) => opened.push(sessionId) }
+      return undefined
+    },
+  }
+  return { ctx, opened, registrations }
+}
+
+function pluginFromLoader() {
+  const plugin = loaded?.factory((specifier) => {
+    if (specifier === 'react') return ReactStub
+    throw new Error(`unexpected require: ${specifier}`)
+  })
+  if (typeof plugin?.apply !== 'function') throw new Error('client module did not load')
+  return plugin
+}
+
+</script>
+<script src="../lib/client.js"></script>
+<script>
+/* ------------------------------------------------------------ phases */
+
+async function phaseOne(plugin) {
+  sessionStorage.removeItem(PHASE_KEY)
+  sessionStorage.removeItem(RESULTS_KEY)
+  localStorage.removeItem(MARKER_KEY)
+
+  const { ctx, registrations } = clientContext()
+  plugin.apply(ctx)
+  await sleep(60)
+  const shadow = drawCaptionBar()
+  await sleep(80)
+
+  const refresh = shadow.querySelector('[data-dsh-refresh-caption]')
+  const restart = shadow.querySelector('[data-dsh-restart-caption]')
+  check('both caption entries mounted', refresh !== null && restart !== null)
+  check('refresh leads, restart follows', refresh?.nextSibling === restart)
+
+  // The caption entries are live, so the header seat renders nothing; it still
+  // publishes the open Session, which is where the refresh takes its target.
+  const component = registrations[0]?.component
+  const tree = component?.({ sessionId: SESSION })
+  check('header seat steps aside for the caption entries', tree === null, JSON.stringify(tree))
+
+  refresh.click()
+  check('one click turns the label busy', refresh.textContent === '刷新中', refresh.textContent)
+  const marker = JSON.parse(localStorage.getItem(MARKER_KEY) ?? 'null')
+  check('the click remembers the Session', marker?.sessionId === SESSION, JSON.stringify(marker))
+  check('a refresh does not call the Host', fetched.length === 0, JSON.stringify(fetched.map((entry) => entry.url)))
+
+  sessionStorage.setItem(RESULTS_KEY, JSON.stringify(results))
+  sessionStorage.setItem(PHASE_KEY, 'one')
+  report()
+
+  // The module reloads the page a moment later. If it never comes, that is the
+  // finding — do not sit here looking hung.
+  setTimeout(() => {
+    check('the page reloads after a refresh click', false, 'still on the same page after 6s')
+    sessionStorage.removeItem(PHASE_KEY)
+    report()
+  }, 6000)
+}
+
+async function phaseTwo(plugin) {
+  sessionStorage.removeItem(PHASE_KEY)
+  const { ctx, opened } = clientContext()
+
+  const marker = JSON.parse(localStorage.getItem(MARKER_KEY) ?? 'null')
+  check('the marker survived the reload', marker?.sessionId === SESSION, JSON.stringify(marker))
+
+  plugin.apply(ctx)
+  await sleep(2600)
+
+  check('the reload landed on the same Session', JSON.stringify(opened) === JSON.stringify([SESSION]), JSON.stringify(opened))
+  check('the marker is consumed once', localStorage.getItem(MARKER_KEY) === null)
+  check('no navigation retried after the landing', opened.length === 1, String(opened.length))
+
+  sessionStorage.removeItem(RESULTS_KEY)
+  report()
+}
+
+const phase = sessionStorage.getItem(PHASE_KEY)
+const plugin = pluginFromLoader()
+;(phase === 'one' ? phaseTwo(plugin) : phaseOne(plugin)).catch((error) => {
+  check('harness completed', false, error.message)
+  console.error('HARNESS CRASH', error)
+  report()
+})
+</script>
+</body>
+</html>
