@@ -64,39 +64,56 @@ jobs:
       - name: Run the suites
         run: npm test
 
-      - name: Pack the tarball this release will ship
-        id: pack
+      # One step on purpose. Splitting pack / notes / publish across steps means
+      # values travel through step outputs and the working tree, and a step that
+      # half-succeeds is reported as "success" while leaving an empty file behind
+      # for the next step to publish. v0.3.3 was published twice that way: first
+      # with a body GitHub generated from pull requests that do not exist, then
+      # with no body at all.
+      - name: Pack, describe and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+
           npm pack --json > pack.json
           tgz="$(node -p "require('./pack.json')[0].filename")"
           sha256sum "$tgz" > "$tgz.sha256"
-          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+
+          # The body comes from the commits between the previous tag and this one,
+          # not from `gh --generate-notes`: that reads only merged pull requests,
+          # and this repository is pushed to directly.
+          node scripts/release-notes.mjs "$TAG" > release-notes.md
+
+          # An annotated tag's first line is the human title of this release.
+          title="$(git for-each-ref --format='%(contents:subject)' "refs/tags/$TAG")"
+          [ -n "$title" ] || title="$TAG"
+
+          # Everything the release is about to say, in the run summary. The job log
+          # needs a token to read; the summary does not, and "what did it actually
+          # send" is the first question when a release comes out wrong.
           {
             echo "### $TAG"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| title | \`$title\` |"
+            echo "| tarball | \`$tgz\` ($(wc -c < "$tgz") bytes) |"
+            echo "| notes | $(wc -c < release-notes.md) bytes |"
+            echo "| tags visible | \`$(git tag -l | tr '\n' ' ')\` |"
+            echo "| node / gh | $(node --version) / $(gh --version | head -1) |"
             echo
             echo '```'
             cat "$tgz.sha256"
             echo '```'
+            echo
+            head -6 release-notes.md
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # The body is built from the commits between the previous tag and this one.
-      # `gh --generate-notes` would only list merged pull requests, and this
-      # repository is pushed to directly — v0.3.3 shipped with a body of one line.
-      - name: Build the release notes
-        run: |
-          node scripts/release-notes.mjs "$TAG" > release-notes.md
-          # An annotated tag's first line is the human title of this release.
-          title="$(git for-each-ref --format='%(contents:subject)' "refs/tags/$TAG")"
-          echo "title=${title:-$TAG}" >> "$GITHUB_OUTPUT"
-          cat release-notes.md
-        id: notes
+          # Never publish an empty body or an empty title. Both have happened.
+          test -s release-notes.md
+          test -n "$title"
 
-      - name: Publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tgz='${{ steps.pack.outputs.tgz }}'
-          title='${{ steps.notes.outputs.title }}'
           if gh release view "$TAG" > /dev/null 2>&1; then
             # Re-run for a tag that already has a release: refresh the notes and
             # replace the assets. Used after fixing a step that failed, and when
