@@ -73,6 +73,7 @@ jobs:
       - uses: ./.github/actions/launcher
         with:
           prefix: ${{ runner.temp }}/dsh-launcher
+          os: ${{ runner.os }}
 
       # One step on purpose. Splitting pack / notes / publish across steps means
       # values travel through step outputs and the working tree, and a step that

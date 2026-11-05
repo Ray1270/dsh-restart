@@ -9,9 +9,13 @@
 #
 # So the tree is cached by launcher version: a new launcher release changes the
 # key, everything else is a restore. The cache is keyed on the version rather
-# than a date so it is reproducible, and the restored copy is *ran* before it is
+# than a date so it is reproducible, and the restored copy is *run* before it is
 # trusted — a half-written cache entry would otherwise fail later, in the middle
 # of an install, looking like the plugin's fault.
+#
+# Note on `os`: the `runner` context is not available in action metadata (GitHub
+# rejects the whole file with "Unrecognized named-value: 'runner'"), so the
+# workflow passes it in explicitly.
 name: dsh launcher
 description: Install (or restore) the real dsh launcher and pnpm, and put them on PATH.
 
@@ -19,8 +23,13 @@ inputs:
   prefix:
     description: |
       Directory the launcher is installed into and cached from. Must be stable
-      across runs for the cache to hit; `${{ runner.temp }}/dsh-launcher` works.
+      across runs for the cache to hit — a path under the runner's temp
+      directory works, because that path is the same on every run.
     required: true
+  os:
+    description: The runner OS, only used to keep cache entries from crossing platforms.
+    required: false
+    default: windows
 
 outputs:
   version:
@@ -33,8 +42,6 @@ runs:
     - name: Which launcher version is being cached
       id: version
       shell: bash
-      env:
-        PREFIX: ${{ inputs.prefix }}
       run: |
         set -euo pipefail
         # A registry hiccup should not fail the job here — the install below
@@ -50,7 +57,7 @@ runs:
       with:
         path: ${{ inputs.prefix }}
         # v1 marks the shape of what is in here (both packages, one prefix).
-        key: dsh-launcher-v1-${{ runner.os }}-${{ steps.version.outputs.version }}
+        key: dsh-launcher-v1-${{ inputs.os }}-${{ steps.version.outputs.version }}
 
     - name: Install when the cache missed, verify when it hit
       shell: bash
