@@ -212,17 +212,26 @@ node scripts/install-check.mjs   # 13 项：把 tgz 真的装进一个新建的 
 ```bash
 # 1. 改 package.json 的 version（tag 必须与之一致，否则 release 流程第一步就红）
 # 2. 提交
-git tag v0.3.5
+git tag v0.3.6
 git push origin main --tags
 ```
 
-`release.yml` 随后在 `windows-latest` 上按这个顺序做五件事：
+`release.yml` 随后在 `windows-latest` 上按这个顺序做六件事：
 
 1. 比对 tag 与 `package.json` 的 version（不一致就红，不打包）；
 2. 跑 `npm test`；
 3. 用同一个 checkout 打 `npm pack`，附上 `.sha256`；
 4. 连着验两次这个 tgz。`package-check` 把它解开：`files` 承诺的、`main` / `exports` 指向的、bundle patch 和 `lib/helper.ps1` 都必须在包里，最后把**包里那份** `lib/index.js` 和 `lib/client.js` 拉起来跑各自的 smoke（37 项 / 27 项）。`install-check` 再往前一步：把它真的装进一个刚建的 profile，让真 launcher 组合一遍，再读回它组合出来的东西（13 项）；
 5. 删掉这个 tag 上可能已有的 release，重新建一个公开的，正文由 `scripts/release-notes.mjs` 从上一个 tag 之后的提交生成。
+6. 如果仓库里有 `NPM_TOKEN` secret，把**同一个 tgz**（不是重新打包）`npm publish` 到 npm，再把 npm 现在提供的那个文件下载回来、和本地 `.sha256` 比一遍——字节一致才算过；没有这个 secret 就打印一行 `npm: no NPM_TOKEN secret — … stays unpublished there` 然后跳过。
+
+第 6 步是可选的，缺 secret 不算失败：打一个 tag 不该因为「npm 那边还没建好」而变红。要开这一路：
+
+- npm 上 `@ray1270` 得先是你的（注册同名账号即自动持有这个 scope）；
+- 建一个 token——Classic 的 **Automation**，或者 Granular 里勾 **Read and write**、只给这一个包；
+- 加到仓库 Settings → Secrets and variables → Actions，名字 `NPM_TOKEN`。
+
+之后打的 tag 会自动多一份 npm 镜像；已经发过的版本不会被重复发布（重跑同一个 tag 会打印 `already there — left alone`），所以 `workflow_dispatch` 那条恢复路径仍然安全。
 
 第 4 步里的 `install-check` 需要一个真的 launcher，而在一台 windows runner 上 `npm install --global pnpm @deepseek-ai/dsh` 量到 **13 分 16 秒**（654 个包）。第一次把它加进流程时，发布就是卡在这里，然后被我拿掉了。
 
