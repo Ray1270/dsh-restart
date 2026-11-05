@@ -212,7 +212,7 @@ node scripts/install-check.mjs   # 13 项：把 tgz 真的装进一个新建的 
 ```bash
 # 1. 改 package.json 的 version（tag 必须与之一致，否则 release 流程第一步就红）
 # 2. 提交
-git tag v0.3.4
+git tag v0.3.5
 git push origin main --tags
 ```
 
