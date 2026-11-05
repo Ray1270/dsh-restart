@@ -114,14 +114,30 @@ jobs:
           test -s release-notes.md
           test -n "$title"
 
+          # Delete and re-create rather than edit in place.
+          #
+          # Editing was the wrong idea twice over. First, a half-finished edit left
+          # the release with no body. Then, after the tag was moved to a new commit,
+          # the existing release was no longer reachable through the public API —
+          # `gh release view` still found it with a token, so `gh release edit`
+          # reported success while updating a release that was a draft, and no
+          # amount of successful edits made it visible.
+          #
+          # Re-creating makes the published state a function of this run alone: it
+          # exists, it is public, and its body is the file above.
           if gh release view "$TAG" > /dev/null 2>&1; then
-            # Re-run for a tag that already has a release: refresh the notes and
-            # replace the assets. Used after fixing a step that failed, and when
-            # the notes format itself changes.
-            echo "release $TAG already exists — refreshing notes and assets"
-            gh release edit "$TAG" --title "$title" --notes-file release-notes.md
-            gh release upload "$TAG" "$tgz" "$tgz.sha256" --clobber
-          else
-            gh release create "$TAG" "$tgz" "$tgz.sha256" \
-              --title "$title" --notes-file release-notes.md
+            echo "replacing the existing release for $TAG"
+            gh release delete "$TAG" --yes
+          fi
+
+          gh release create "$TAG" "$tgz" "$tgz.sha256" \
+            --title "$title" --notes-file release-notes.md --verify-tag
+
+          # Verified, not assumed: the release must be public and non-empty.
+          draft="$(gh release view "$TAG" --json isDraft -q .isDraft)"
+          bodylen="$(gh release view "$TAG" --json body -q .body | wc -c)"
+          echo "published $TAG: draft=$draft, body=$bodylen bytes" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$draft" != "false" ] || [ "$bodylen" -lt 100 ]; then
+            echo "::error::release $TAG published badly: draft=$draft body=$bodylen bytes"
+            exit 1
           fi
