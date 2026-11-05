@@ -54,6 +54,7 @@ const argv = process.argv.slice(2)
 const keep = argv.includes('--keep')
 const tarballArg = argv[argv.indexOf('--tarball') + 1]
 const givenTarball = argv.includes('--tarball') ? tarballArg : undefined
+if (argv.includes('--tarball') && !givenTarball) fatal('--tarball needs a path')
 
 /* --------------------------------------------------------- what we need here */
 
