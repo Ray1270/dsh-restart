@@ -214,9 +214,22 @@ git tag v0.3.3
 git push origin main --tags
 ```
 
-`release.yml` 随后在 `windows-latest` 上跑完 `npm test`，用同一个 checkout 打 `npm pack`，把 tgz 和它的 `.sha256` 一起附到 Release 上，发布说明由 `--generate-notes` 从上一个 tag 之后的提交生成。
+`release.yml` 随后在 `windows-latest` 上按这个顺序做四件事：
 
-顺序是刻意的：**先验版本、再跑测试、最后才打包**。测试红了就什么都发不出去，所以 Release 里那个 tgz 一定是跑绿的那份。想重发一个已存在的 tag（比如某步一时抽风），用 `workflow_dispatch` 再跑一次：会替换附件、保留原来的说明。
+1. 比对 tag 与 `package.json` 的 version（不一致就红，不打包）；
+2. 跑 `npm test`；
+3. 用同一个 checkout 打 `npm pack`，附上 `.sha256`；
+4. 删掉这个 tag 上可能已有的 release，重新建一个公开的，正文由 `scripts/release-notes.mjs` 从上一个 tag 之后的提交生成。
+
+顺序是刻意的：**先验版本、再跑测试、最后才打包**。测试红了就什么都发不出去，所以 Release 里那个 tgz 一定是跑绿的那份。
+
+两条容易踩的坑，都是这台流水线自己踩出来的：
+
+- **发布说明不能用 `--generate-notes`。** 那个功能只列「合并的 PR」，而这个仓库是直接往 `main` 推的，v0.3.3 第一版发出来时正文就只有一行 `Full Changelog`。
+- **不能用 `gh release edit` 就地改。** tag 被移到新提交之后，旧 release 对外就查不到了（`GET /releases/tags/vX` 返回 404），但带 token 的 `gh release view` 还找得到它——于是编辑「成功」了三次，公开 API 里始终只有一个更老的版本。所以现在是删掉重建。
+
+发布完还会**读回 API 校验**：`isDraft` 必须是 `false`、正文长度必须够；不对就用 `::error::` 让这一步红掉。想重发一个已存在的 tag（比如某步一时抽风），用 `workflow_dispatch` 再跑一次即可——它会重建 release，说明也一起重算。
+
 
 ---
 
