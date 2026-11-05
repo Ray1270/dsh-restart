@@ -1,5 +1,7 @@
 # @ray1270/dsh-restart
 
+[![CI](https://github.com/Ray1270/dsh-restart/actions/workflows/ci.yml/badge.svg)](https://github.com/Ray1270/dsh-restart/actions/workflows/ci.yml)
+
 给 DeepSeek Harness **桌面版**加两个常驻按钮，就在窗口顶栏「应用」「编辑」右边：
 
 ```
