@@ -48,14 +48,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history and every tag: `--generate-notes` builds the release body
-          # from the commits since the previous tag.
+          # Full history and every tag: the release body is built from the
+          # commits between the previous tag and this one.
           fetch-depth: 0
           ref: ${{ inputs.tag || github.ref_name }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+
+      # The install check below is the only step that talks to the real
+      # launcher, so it needs the launcher and the pnpm it forwards to. Failing
+      # here is deliberate: a release nobody can install is not a release.
+      - name: Install the launcher and pnpm
+        run: npm install --global pnpm @deepseek-ai/dsh
 
       # The tag is a claim about what is in the box. Check the claim first.
       - name: The tag must name the packaged version
@@ -79,6 +85,13 @@ jobs:
           npm pack --json > pack.json
           tgz="$(node -p "require('./pack.json')[0].filename")"
           sha256sum "$tgz" > "$tgz.sha256"
+
+          # Everything above tests the source tree. This tests the thing people
+          # download: install the tarball into a profile that never existed, then
+          # ask the launcher to compose it. `files` and the bundle patch are only
+          # exercised by shipping a package — the tree can be perfect while the
+          # package is missing a file.
+          node scripts/install-check.mjs --tarball "$tgz"
 
           # The body comes from the commits between the previous tag and this one,
           # not from `gh --generate-notes`: that reads only merged pull requests,
