@@ -79,16 +79,32 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The body is built from the commits between the previous tag and this one.
+      # `gh --generate-notes` would only list merged pull requests, and this
+      # repository is pushed to directly — v0.3.3 shipped with a body of one line.
+      - name: Build the release notes
+        run: |
+          node scripts/release-notes.mjs "$TAG" > release-notes.md
+          # An annotated tag's first line is the human title of this release.
+          title="$(git for-each-ref --format='%(contents:subject)' "refs/tags/$TAG")"
+          echo "title=${title:-$TAG}" >> "$GITHUB_OUTPUT"
+          cat release-notes.md
+        id: notes
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tgz='${{ steps.pack.outputs.tgz }}'
+          title='${{ steps.notes.outputs.title }}'
           if gh release view "$TAG" > /dev/null 2>&1; then
-            # Re-run of an existing release: replace the assets, keep the notes.
-            echo "release $TAG already exists — replacing its assets"
+            # Re-run for a tag that already has a release: refresh the notes and
+            # replace the assets. Used after fixing a step that failed, and when
+            # the notes format itself changes.
+            echo "release $TAG already exists — refreshing notes and assets"
+            gh release edit "$TAG" --title "$title" --notes-file release-notes.md
             gh release upload "$TAG" "$tgz" "$tgz.sha256" --clobber
           else
             gh release create "$TAG" "$tgz" "$tgz.sha256" \
-              --title "$TAG" --generate-notes
+              --title "$title" --notes-file release-notes.md
           fi
