@@ -38,12 +38,15 @@
 
 ## 安装
 
+到 [Releases](https://github.com/Ray1270/dsh-restart/releases) 下载最新的 `ray1270-dsh-restart-<版本>.tgz`，然后在应用里 **插件 → 添加插件** 填它的绝对路径。
+
+从源码装（开发）：
+
 ```bash
-# 本地路径安装（开发）
-dsh plugin --profile desktop add "D:/dshwork/projects/插件/dsh-restart"
+dsh plugin --profile desktop add "<这个目录的绝对路径>"
 
 # 或直接改 profile 的 package.json：
-#   dependencies["@ray1270/dsh-restart"] = "link:D:/dshwork/projects/插件/dsh-restart"
+#   dependencies["@ray1270/dsh-restart"] = "link:<这个目录的绝对路径>"
 #   dsh.profile.bundles 里加一行 "@ray1270/dsh-restart"
 ```
 
