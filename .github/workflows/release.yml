@@ -218,7 +218,10 @@ jobs:
           registry="$(npm config get registry)"
           registry="${registry%/}"
           # @scope/name -> @scope%2fname, the path npm's own client uses.
-          escaped="$(node -p "const n = process.argv[1]
+          # `-e`, not `-p`: -p also prints the value of the last expression, so
+          # process.stdout.write() appended a "true" to the name and every
+          # lookup 404'd. Run 11 published nothing and could not see why.
+          escaped="$(node -e "const n = process.argv[1]
             const i = n.indexOf('/')
             process.stdout.write(i < 0 ? n : n.slice(0, i) + '%2f' + n.slice(i + 1))" "$name")"
 
