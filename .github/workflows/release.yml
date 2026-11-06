@@ -2,10 +2,13 @@
 # tarball attached to that release is the one this job packed and tested — not a
 # file uploaded by hand from someone's laptop.
 #
-# The same tarball is mirrored to npm when the repository holds an NPM_TOKEN
-# secret. Nothing is rebuilt for npm: `npm publish ./<file>.tgz` ships the file
-# that was just attached, and the archive npm serves is then compared with that
-# file's checksum. Without the secret the step says so and publishes nothing.
+# The same tarball is mirrored to npm: nothing is rebuilt for it,
+# `npm publish ./<file>.tgz` ships the file that was just attached, and the
+# archive npm serves is then compared with that file's checksum byte for byte.
+# The route is npm trusted publishing — this job trades its GitHub OIDC token for
+# a short-lived npm credential, so the repository holds no npm secret and every
+# publish carries a provenance attestation. An NPM_TOKEN secret still works as a
+# fallback; see the npm block at the end of `Pack, describe and publish`.
 #
 #   git tag v0.3.3 && git push origin v0.3.3
 #
@@ -26,9 +29,12 @@ on:
         required: true
         type: string
 
-# `gh release create` writes to the repository; the token needs nothing else.
+# `gh release create` writes to the repository. `id-token: write` is the OIDC
+# half of npm trusted publishing: without it the CLI has nothing to trade for a
+# publish credential. It grants no other repository access.
 permissions:
   contents: write
+  id-token: write
 
 # A tag is immutable, so these runs are cheap enough to leave alone — cancelling
 # one mid-flight would leave half a release behind.
@@ -87,8 +93,9 @@ jobs:
       - name: Pack, describe and publish
         env:
           GH_TOKEN: ${{ github.token }}
-          # Empty until someone adds the secret. The npm block at the end of this
-          # step reads the empty string as "npm has not been set up yet".
+          # Fallback only, empty unless someone adds the secret. The npm block at
+          # the end of this step prefers trusted publishing and reads this only
+          # when it is set.
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
@@ -131,7 +138,7 @@ jobs:
             echo "| tarball | \`$tgz\` ($(wc -c < "$tgz") bytes) |"
             echo "| notes | $(wc -c < release-notes.md) bytes |"
             echo "| tags visible | \`$(git tag -l | tr '\n' ' ')\` |"
-            echo "| node / gh | $(node --version) / $(gh --version | head -1) |"
+            echo "| node / npm / gh | $(node --version) / $(npm --version) / $(gh --version | head -1) |"
             echo
             echo '```'
             cat "$tgz.sha256"
@@ -174,28 +181,78 @@ jobs:
 
           # ---------------------------------------------------------------- npm
           #
-          # Everything above proved the tarball; this puts it where `npm i` finds
-          # it. Deliberately last, so the failure modes stay ordered: a bad
-          # tarball stops before the release, a bad npm publish stops after it,
-          # and the run is red either way. It is also the only part of this step
-          # that a re-run of the same tag must not repeat — hence the two guards.
+          # Everything above proved the tarball; this puts it where
+          # `dsh plugin add @ray1270/dsh-restart` finds it. Deliberately last, so
+          # the failure modes stay ordered: a bad tarball stops before the
+          # release, a bad npm publish stops after it, and the run is red either
+          # way. It is also the only part of this step that a re-run of the same
+          # tag must not repeat — hence the two guards.
           #
-          # A tag must not fail because a registry this project did not depend on
-          # yesterday has not been set up: with no secret this prints a line and
-          # moves on, and the line is what answers "did it reach npm".
+          # Two ways in:
+          #
+          #   trusted publishing (default)  npmjs.com is configured to trust this
+          #                                 repository and this workflow file; the
+          #                                 CLI trades the runner's OIDC token for a
+          #                                 credential good for one publish, and
+          #                                 --provenance attaches a signed
+          #                                 attestation to the tarball. Needs
+          #                                 `id-token: write` and npm >= 11.5.2.
+          #                                 Nothing to leak, nothing to rotate.
+          #   NPM_TOKEN                     the escape hatch from the previous
+          #                                 round, still honoured when the secret
+          #                                 exists.
+          #
+          # Unlike the previous round, a publish that did not happen is a red
+          # run: npm is an advertised install path now, so "npm does not have it"
+          # is a broken release rather than a registry this project does not
+          # depend on. The one case that stays green is "nothing is configured at
+          # all" — no OIDC, no secret — because that is a tag pushed from a
+          # machine that has no business publishing.
           version="$(node -p "require('./package.json').version")"
           spec="@ray1270/dsh-restart@$version"
-          if [ -z "${NPM_TOKEN:-}" ]; then
-            echo "npm: no NPM_TOKEN secret — $spec stays unpublished there" | tee -a "$GITHUB_STEP_SUMMARY"
-          elif npm view "$spec" version > /dev/null 2>&1; then
+          if npm view "$spec" version > /dev/null 2>&1; then
             echo "npm: $spec is already there — left alone" | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ -z "${NPM_TOKEN:-}" ] && [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "npm: no trusted publisher and no NPM_TOKEN here — $spec stays unpublished there" \
+              | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            # The token is written outside the checkout and only for this step, so
-            # it can never reach a tarball, the summary, or `git status`.
-            npmrc="$RUNNER_TEMP/npmrc"
-            printf 'registry=https://registry.npmjs.org/\n//registry.npmjs.org/:_authToken=%s\n' \
-              "$NPM_TOKEN" > "$npmrc"
-            NPM_CONFIG_USERCONFIG="$npmrc" npm publish "./$tgz" --access public
+            if [ -n "${NPM_TOKEN:-}" ]; then
+              # The token is written outside the checkout and only for this step,
+              # so it can never reach a tarball, the summary, or `git status`.
+              npmrc="$RUNNER_TEMP/npmrc"
+              printf 'registry=https://registry.npmjs.org/\n//registry.npmjs.org/:_authToken=%s\n' \
+                "$NPM_TOKEN" > "$npmrc"
+              export NPM_CONFIG_USERCONFIG="$npmrc"
+              route=NPM_TOKEN
+              publish=(npm publish "./$tgz" --access public)
+            else
+              # The one requirement that is not about this repository: the CLI
+              # learns trusted publishing in npm 11.5.2, and an older one fails
+              # with a message about credentials that never mentions the version.
+              npm_version="$(npm --version)"
+              node -e 'const v = process.argv[1].split(".").map(Number);
+                const ok = v[0] > 11 || (v[0] === 11 && (v[1] > 5 || (v[1] === 5 && v[2] >= 2)));
+                process.exit(ok ? 0 : 1)' "$npm_version" || {
+                echo "::error::trusted publishing needs npm >= 11.5.2, this runner has $npm_version"
+                exit 1
+              }
+              route=OIDC
+              publish=(npm publish "./$tgz" --access public --provenance)
+            fi
+
+            # stderr goes to a file outside the checkout, so a failure can name
+            # its likely cause; it is printed either way, because npm's own words
+            # are the part a red run needs.
+            errfile="$RUNNER_TEMP/npm-publish.err"
+            if ! "${publish[@]}" 2> "$errfile"; then
+              cat "$errfile"
+              if grep -qi 'trusted publisher' "$errfile"; then
+                echo "::error::npm refused: this repository and workflow are not a trusted publisher for @ray1270/dsh-restart (npmjs.com → package → Trusted Publisher)"
+              else
+                echo "::error::npm publish failed for $spec (route: $route)"
+              fi
+              exit 1
+            fi
 
             # What npm serves is what the release attached: the bytes, not just the
             # version number. Publishing the file (rather than a directory) is what
@@ -219,5 +276,5 @@ jobs:
               echo "::error::npm serves $got, the release attaches $want"
               exit 1
             fi
-            echo "npm: $spec published, sha256 matches the release ($got)" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "npm: $spec published via $route, sha256 matches the release ($got)" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
