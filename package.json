@@ -1,6 +1,6 @@
 {
   "name": "@ray1270/dsh-restart",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Refresh and one-click restart for the DeepSeek Harness desktop app: 刷新 reloads the client on the same Session, 重启 restarts the shell back on that Session through a helper the WMI service starts outside the application's process tree",
   "type": "module",
   "main": "lib/index.js",

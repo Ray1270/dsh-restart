@@ -220,7 +220,7 @@ node scripts/install-check.mjs   # 13 项：把 tgz 真的装进一个新建的 
 ```bash
 # 1. 改 package.json 的 version（tag 必须与之一致，否则 release 流程第一步就红）
 # 2. 提交
-git tag v0.3.6
+git tag v0.3.7
 git push origin main --tags
 ```
 
@@ -233,10 +233,26 @@ git push origin main --tags
 5. 删掉这个 tag 上可能已有的 release，重新建一个公开的，正文由 `scripts/release-notes.mjs` 从上一个 tag 之后的提交生成。
 6. 把**同一个 tgz**（不是重新打包）`npm publish` 到 npm。默认走 trusted publishing：这一步拿 runner 的 OIDC 身份换一个只够发一次的凭据，`--provenance` 顺带给 tarball 签一份来源证明，仓库里没有任何 npm 密钥。发完把 npm 现在提供的那个文件下载回来、和本地 `.sha256` 比一遍——字节一致才算过。只有「既没配 trusted publisher、也没有 `NPM_TOKEN`」（比如本地打 tag）才打印一行跳过；该发而没发出去是红的。
 
-trusted publishing 在 npmjs.com 上一次性配置：
+trusted publishing 已经配好了，**不用再去网页上点设置**。当前关系随时可复核：
+
+```bash
+npm trust list @ray1270/dsh-restart
+# type: github / id: 7414ac6a-742e-44c2-aa23-866885d25bed
+# file: release.yml / repository: Ray1270/dsh-restart
+# permissions: publish, stage publish
+```
+
+它是用 CLI 建的，代价只有一次 OTP（2FA），不需要开浏览器：
+
+```bash
+npm trust github @ray1270/dsh-restart --file release.yml \
+  --repo Ray1270/dsh-restart --allow-publish -y
+```
+
+要复刻到别的包上，前提和约束是：
 
 - npm 上 `@ray1270` 得先是你的（注册同名账号即自动持有这个 scope）；
-- 打开包页面 → **Settings** → **Trusted Publisher** → **GitHub Actions**，填仓库 `Ray1270/dsh-restart`、workflow 文件名 `release.yml`（environment 留空）；
+- `--file` 填 workflow 的**文件名**（`release.yml`），不是路径；`environment` 留空就是不绑定 environment；发布这一步必须和它写在同一个文件里（复用 workflow 会改变 npm 看到的那个文件名）；
 - 仓库里**不用加任何 secret**：`release.yml` 已经有 `permissions: id-token: write`，发布步骤靠 runner 的 OIDC 身份换凭据。npm CLI 得 ≥ 11.5.2（node 24 自带的够用），发布步骤会先查版本，太老就带着明确信息红掉，而不是丢一句「认证失败」。
 
 `NPM_TOKEN` secret 仍然被支持（有就优先用它）：Classic 的 **Automation**，或者 Granular 里勾 **Read and write**、只给这一个包。但 npm 已公布 bypass-2FA token 的直接发布会在 2027 年 1 月收回（[changelog](https://github.blog/changelog/2026-07-31-restricting-npm-bypass-2fa-granular-access-tokens/)），所以默认路径是 OIDC。
