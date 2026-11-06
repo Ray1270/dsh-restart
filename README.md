@@ -231,7 +231,7 @@ git push origin main --tags
 3. 用同一个 checkout 打 `npm pack`，附上 `.sha256`；
 4. 连着验两次这个 tgz。`package-check` 把它解开：`files` 承诺的、`main` / `exports` 指向的、bundle patch 和 `lib/helper.ps1` 都必须在包里，最后把**包里那份** `lib/index.js` 和 `lib/client.js` 拉起来跑各自的 smoke（37 项 / 27 项）。`install-check` 再往前一步：把它真的装进一个刚建的 profile，让真 launcher 组合一遍，再读回它组合出来的东西（13 项）；
 5. 删掉这个 tag 上可能已有的 release，重新建一个公开的，正文由 `scripts/release-notes.mjs` 从上一个 tag 之后的提交生成。
-6. 把**同一个 tgz**（不是重新打包）`npm publish` 到 npm。默认走 trusted publishing：这一步拿 runner 的 OIDC 身份换一个只够发一次的凭据，`--provenance` 顺带给 tarball 签一份来源证明，仓库里没有任何 npm 密钥。发完把 npm 现在提供的那个文件下载回来、和本地 `.sha256` 比一遍——字节一致才算过。只有「既没配 trusted publisher、也没有 `NPM_TOKEN`」（比如本地打 tag）才打印一行跳过；该发而没发出去是红的。
+6. 把**同一个 tgz**（不是重新打包）`npm publish` 到 npm。默认走 trusted publishing：这一步拿 runner 的 OIDC 身份换一个只够发一次的凭据，`--provenance` 顺带给 tarball 签一份来源证明，仓库里没有任何 npm 密钥。发完**等 registry 真的能看到这一版**（问的是 version 文档、带 nonce，绕过所有缓存；最多两分钟），再把 npm 提供的那份下载回来、和本地 `.sha256` 比一遍——字节一致才算过。只有「既没配 trusted publisher、也没有 `NPM_TOKEN`」（比如本地打 tag）才打印一行跳过；该发而没发出去是红的。
 
 trusted publishing 已经配好了，**不用再去网页上点设置**。当前关系随时可复核：
 
@@ -257,7 +257,9 @@ npm trust github @ray1270/dsh-restart --file release.yml \
 
 `NPM_TOKEN` secret 仍然被支持（有就优先用它）：Classic 的 **Automation**，或者 Granular 里勾 **Read and write**、只给这一个包。但 npm 已公布 bypass-2FA token 的直接发布会在 2027 年 1 月收回（[changelog](https://github.blog/changelog/2026-07-31-restricting-npm-bypass-2fa-granular-access-tokens/)），所以默认路径是 OIDC。
 
-之后打的 tag 会自动多一份 npm 镜像；已经发过的版本不会被重复发布（重跑同一个 tag 会打印 `already there — left alone`），所以 `workflow_dispatch` 那条恢复路径仍然安全。
+之后打的 tag 会自动多一份 npm 镜像；已经发过的版本不会被重复发布（重跑同一个 tag 会走「已经有了」那条路，并且**仍然比一遍字节**，不会盲跳），所以 `workflow_dispatch` 那条恢复路径仍然安全。
+
+判断「npm 上有没有这一版」不能读 packument：它走 CDN，发布会滞后一两分钟。v0.3.7 就是这么红过一次的——05:12:59 发布成功，05:13:18 的检查判红，而 registry 上 05:14:35 才出现。所以现在读的是 `/@ray1270%2fdsh-restart/<version>?t=<nonce>` 这个 version 文档，并且最多等两分钟。
 
 第 4 步里的 `install-check` 需要一个真的 launcher，而在一台 windows runner 上 `npm install --global pnpm @deepseek-ai/dsh` 量到 **13 分 16 秒**（654 个包）。第一次把它加进流程时，发布就是卡在这里，然后被我拿掉了。
 

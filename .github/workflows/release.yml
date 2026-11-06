@@ -185,8 +185,7 @@ jobs:
           # `dsh plugin add @ray1270/dsh-restart` finds it. Deliberately last, so
           # the failure modes stay ordered: a bad tarball stops before the
           # release, a bad npm publish stops after it, and the run is red either
-          # way. It is also the only part of this step that a re-run of the same
-          # tag must not repeat — hence the two guards.
+          # way.
           #
           # Two ways in:
           #
@@ -208,10 +207,65 @@ jobs:
           # depend on. The one case that stays green is "nothing is configured at
           # all" — no OIDC, no secret — because that is a tag pushed from a
           # machine that has no business publishing.
+          #
+          # What this block proves, in every case it can, is not "a version
+          # exists" but "npm serves the bytes this release attached". See
+          # verify_served below.
           version="$(node -p "require('./package.json').version")"
-          spec="@ray1270/dsh-restart@$version"
-          if npm view "$spec" version > /dev/null 2>&1; then
-            echo "npm: $spec is already there — left alone" | tee -a "$GITHUB_STEP_SUMMARY"
+          name="$(node -p "require('./package.json').name")"
+          spec="$name@$version"
+
+          registry="$(npm config get registry)"
+          registry="${registry%/}"
+          # @scope/name -> @scope%2fname, the path npm's own client uses.
+          escaped="$(node -p "const n = process.argv[1]
+            const i = n.indexOf('/')
+            process.stdout.write(i < 0 ? n : n.slice(0, i) + '%2f' + n.slice(i + 1))" "$name")"
+
+          # The version document, fetched past every cache in the way.
+          #
+          # Reading the packument (`npm view`) is not good enough here, and that
+          # cost a red run to learn: on v0.3.7 the publish succeeded, but the
+          # CDN kept answering with the copy it already had, so a 15-second
+          # retry loop reported "npm does not serve it yet" for a version that
+          # appeared two minutes later. The nonce makes the URL unique, so no
+          # layer in between can answer from cache.
+          version_doc() {
+            curl -fsS --max-time 20 -H 'Cache-Control: no-cache' \
+              "$registry/$escaped/$version?t=$(date +%s%N)" 2>/dev/null
+          }
+
+          # Publishing is not the thing worth asserting; the bytes are. This runs
+          # on both paths — published a second ago, or published by an earlier
+          # run of the same tag — because the claim being checked is identical.
+          #
+          # `npm publish <file>` sends that file (pacote streams the tarball
+          # rather than repacking it), so this should hold. It is checked anyway:
+          # "should" is what the previous three releases were built on.
+          verify_served() {
+            local route="$1" served want got
+            served="$(printf '%s' "$body" | node -p "JSON.parse(require('fs').readFileSync(0)).dist.tarball")"
+            if [ -z "$served" ]; then
+              echo "::error::npm has $spec but its document names no tarball"
+              exit 1
+            fi
+            curl -fsSL "$served" -o npm-served.tgz
+            want="$(cut -d' ' -f1 "$tgz.sha256")"
+            got="$(sha256sum npm-served.tgz | cut -d' ' -f1)"
+            echo "npm: $served -> sha256 $got"
+            if [ "$want" != "$got" ]; then
+              echo "::error::npm serves $got, the release attaches $want — the tag and npm disagree about $version"
+              exit 1
+            fi
+            echo "npm: $spec ($route), sha256 matches the release ($got)" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+
+          if body="$(version_doc)"; then
+            # Already published. Not a reason to skip the check — a re-run of the
+            # same tag is exactly when "is npm still the file this release
+            # attaches" is worth asking.
+            echo "npm: $spec is already there — checking the bytes" | tee -a "$GITHUB_STEP_SUMMARY"
+            verify_served "already published"
           elif [ -z "${NPM_TOKEN:-}" ] && [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             echo "npm: no trusted publisher and no NPM_TOKEN here — $spec stays unpublished there" \
               | tee -a "$GITHUB_STEP_SUMMARY"
@@ -254,27 +308,25 @@ jobs:
               exit 1
             fi
 
-            # What npm serves is what the release attached: the bytes, not just the
-            # version number. Publishing the file (rather than a directory) is what
-            # should make that true; this is the check that it is. Reads can lag a
-            # publish by a second or two, so ask a few times before calling it red.
-            served=""
-            for _ in 1 2 3 4 5; do
-              served="$(npm view "$spec" dist.tarball 2>/dev/null || true)"
-              [ -n "$served" ] && break
-              sleep 3
+            # Wait for the publish to become visible, then prove the bytes. Two
+            # minutes is the v0.3.7 observation (published at 05:12:59, visible
+            # at 05:14:35) with room on top; the numbers are overridable so the
+            # rehearsal script can run this in one second instead of two minutes.
+            attempts="${NPM_VISIBLE_ATTEMPTS:-24}"
+            interval="${NPM_VISIBLE_SECONDS:-5}"
+            visible=0
+            for _ in $(seq 1 "$attempts"); do
+              if body="$(version_doc)"; then
+                visible=1
+                break
+              fi
+              sleep "$interval"
             done
-            if [ -z "$served" ]; then
-              echo "::error::published $spec but npm does not serve it yet"
+            if [ "$visible" = "0" ]; then
+              # Worth saying plainly, because the opposite is the likelier case:
+              # the publish usually worked and only the CDN is behind.
+              echo "::error::published $spec but npm does not serve it after $((attempts * interval))s — if the version shows up, re-run this workflow and it will be checked instead of republished"
               exit 1
             fi
-            curl -fsSL "$served" -o npm-served.tgz
-            want="$(cut -d' ' -f1 "$tgz.sha256")"
-            got="$(sha256sum npm-served.tgz | cut -d' ' -f1)"
-            echo "npm: $served -> sha256 $got"
-            if [ "$want" != "$got" ]; then
-              echo "::error::npm serves $got, the release attaches $want"
-              exit 1
-            fi
-            echo "npm: $spec published via $route, sha256 matches the release ($got)" | tee -a "$GITHUB_STEP_SUMMARY"
+            verify_served "$route"
           fi
