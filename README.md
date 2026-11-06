@@ -41,11 +41,19 @@
 
 ## 安装
 
-到 [Releases](https://github.com/Ray1270/dsh-restart/releases) 下载最新的 `ray1270-dsh-restart-<版本>.tgz`，然后在应用里 **插件 → 添加插件** 填它的绝对路径。装上之后**需要重启一次应用**才会加载（这一次只能手动重启 —— 鸡生蛋），之后就靠这两个按钮了。
+已发布到 npm，一行命令：
 
-插件管理器会自己把这个包写进 profile 的 `dependencies` 和 `dsh.profile.bundles`，不用手改任何文件。
+```bash
+dsh plugin --profile desktop add @ray1270/dsh-restart
+```
 
-每个发布同时附带一个 `.sha256`，下完可以自己核对一下：
+装完**重启一次应用**才会加载（这一次只能手动重启 —— 鸡生蛋），之后就靠这两个按钮了。
+
+`dsh plugin add` 走的是 `pnpm add` 到 profile 里，再把包名追加进 `dsh.profile.bundles`，不用手改任何文件。应用里的 **插件 → 添加插件** 走的是同一条路，只是多一个填路径的输入框。
+
+不想走 npm 就下载附件：到 [Releases](https://github.com/Ray1270/dsh-restart/releases) 拿最新的 `ray1270-dsh-restart-<版本>.tgz`，在 **插件 → 添加插件** 里填它的绝对路径。两条路装的是同一个文件 —— release 附件和 npm 上那份 tgz 的 sha256 逐字节相同（每个版本都核对过）。
+
+想自己再核对一遍：
 
 ```powershell
 Get-FileHash .\ray1270-dsh-restart-<版本>.tgz -Algorithm SHA256   # 与同名 .sha256 文件比对
@@ -57,7 +65,7 @@ Get-FileHash .\ray1270-dsh-restart-<版本>.tgz -Algorithm SHA256   # 与同名 
 dsh plugin --profile desktop add "<这个目录的绝对路径>"
 ```
 
-`dsh plugin add` 走的是同一条路：`pnpm add` 到 profile 里，再把包名追加进 `dsh.profile.bundles`。装完同样要重启一次应用。
+装完同样要重启一次应用。
 
 ---
 
@@ -223,13 +231,15 @@ git push origin main --tags
 3. 用同一个 checkout 打 `npm pack`，附上 `.sha256`；
 4. 连着验两次这个 tgz。`package-check` 把它解开：`files` 承诺的、`main` / `exports` 指向的、bundle patch 和 `lib/helper.ps1` 都必须在包里，最后把**包里那份** `lib/index.js` 和 `lib/client.js` 拉起来跑各自的 smoke（37 项 / 27 项）。`install-check` 再往前一步：把它真的装进一个刚建的 profile，让真 launcher 组合一遍，再读回它组合出来的东西（13 项）；
 5. 删掉这个 tag 上可能已有的 release，重新建一个公开的，正文由 `scripts/release-notes.mjs` 从上一个 tag 之后的提交生成。
-6. 如果仓库里有 `NPM_TOKEN` secret，把**同一个 tgz**（不是重新打包）`npm publish` 到 npm，再把 npm 现在提供的那个文件下载回来、和本地 `.sha256` 比一遍——字节一致才算过；没有这个 secret 就打印一行 `npm: no NPM_TOKEN secret — … stays unpublished there` 然后跳过。
+6. 把**同一个 tgz**（不是重新打包）`npm publish` 到 npm。默认走 trusted publishing：这一步拿 runner 的 OIDC 身份换一个只够发一次的凭据，`--provenance` 顺带给 tarball 签一份来源证明，仓库里没有任何 npm 密钥。发完把 npm 现在提供的那个文件下载回来、和本地 `.sha256` 比一遍——字节一致才算过。只有「既没配 trusted publisher、也没有 `NPM_TOKEN`」（比如本地打 tag）才打印一行跳过；该发而没发出去是红的。
 
-第 6 步是可选的，缺 secret 不算失败：打一个 tag 不该因为「npm 那边还没建好」而变红。要开这一路：
+trusted publishing 在 npmjs.com 上一次性配置：
 
 - npm 上 `@ray1270` 得先是你的（注册同名账号即自动持有这个 scope）；
-- 建一个 token——Classic 的 **Automation**，或者 Granular 里勾 **Read and write**、只给这一个包；
-- 加到仓库 Settings → Secrets and variables → Actions，名字 `NPM_TOKEN`。
+- 打开包页面 → **Settings** → **Trusted Publisher** → **GitHub Actions**，填仓库 `Ray1270/dsh-restart`、workflow 文件名 `release.yml`（environment 留空）；
+- 仓库里**不用加任何 secret**：`release.yml` 已经有 `permissions: id-token: write`，发布步骤靠 runner 的 OIDC 身份换凭据。npm CLI 得 ≥ 11.5.2（node 24 自带的够用），发布步骤会先查版本，太老就带着明确信息红掉，而不是丢一句「认证失败」。
+
+`NPM_TOKEN` secret 仍然被支持（有就优先用它）：Classic 的 **Automation**，或者 Granular 里勾 **Read and write**、只给这一个包。但 npm 已公布 bypass-2FA token 的直接发布会在 2027 年 1 月收回（[changelog](https://github.blog/changelog/2026-07-31-restricting-npm-bypass-2fa-granular-access-tokens/)），所以默认路径是 OIDC。
 
 之后打的 tag 会自动多一份 npm 镜像；已经发过的版本不会被重复发布（重跑同一个 tag 会打印 `already there — left alone`），所以 `workflow_dispatch` 那条恢复路径仍然安全。
 
